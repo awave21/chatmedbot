@@ -1,0 +1,15 @@
+.env
+.env.*
+!env.example
+logs/
+# Артефакты GraphRAG (parquet, cache) — не коммитим
+data/graphrag/*
+!data/graphrag/.gitkeep
+*.log
+*.pid
+*.sock
+backup_before_password_change.sql
+.DS_Store
+node_modules
+.claude/
+.cursor/

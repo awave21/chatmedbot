@@ -1,0 +1,175 @@
+<template>
+  <div
+    :class="[
+      'min-h-0',
+      /* h-full + overflow-hidden без внутреннего скролла обрезали контент (база знаний и др.) */
+      props.contained
+        ? props.preventInnerScroll
+          ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+          : 'flex h-full min-h-0 flex-col overflow-hidden'
+        : '',
+    ]"
+  >
+    <div
+      :class="[
+        'flex min-h-0 flex-col',
+        props.contained
+          ? props.preventInnerScroll
+            ? 'min-h-0 flex-1 overflow-hidden'
+            : 'min-h-0 flex-1 overflow-y-auto overflow-x-hidden'
+          : '',
+        /* Чат — на всю ширину без внешних полей; остальные страницы — отступы от края main */
+        !props.flush ? 'p-4 sm:p-6' : '',
+      ]"
+    >
+      <!-- Auth Status Banner -->
+    <div v-if="!isAuthenticated" class="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center">
+          <AlertCircle class="h-5 w-5 text-yellow-400 mr-3" />
+          <div>
+            <h3 class="text-sm font-medium text-yellow-800">
+              Требуется аутентификация
+            </h3>
+            <p class="text-sm text-yellow-700 mt-1">
+              Войдите в систему для редактирования агента
+            </p>
+          </div>
+        </div>
+        <button
+          @click="showAuthModal = true"
+          class="px-4 py-2 bg-yellow-600 text-white text-sm font-medium rounded-lg hover:bg-yellow-700 transition-colors"
+        >
+          Войти
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading State -->
+    <div v-if="isLoading" class="flex justify-center py-12">
+      <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+    </div>
+
+    <div v-else class="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
+      <slot />
+    </div>
+
+    <AuthModal
+      :is-open="showAuthModal"
+      @close="showAuthModal = false"
+      @authenticated="handleAuthenticated"
+    />
+    <AgentTestChatWidget
+      v-if="
+        isAuthenticated
+        && !!resolveAgentId(route.params.id as string | string[] | undefined)
+        && isSystemPromptPage
+      "
+    />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, watch, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { navigateTo } from '#app'
+import { storeToRefs } from 'pinia'
+import { AlertCircle, Check, Loader2 } from 'lucide-vue-next'
+import { useAuth } from '~/composables/useAuth'
+import { usePermissions } from '~/composables/usePermissions'
+import { useAgentEditorStore } from '~/composables/useAgentEditorStore'
+import AuthModal from '~/components/AuthModal.vue'
+import AgentTestChatWidget from '~/components/agents/AgentTestChatWidget.vue'
+
+type Props = {
+  title: string
+  hideActions?: boolean
+  /** Высота по main + без внешнего скролла (таблицы, внутренний overflow) */
+  contained?: boolean
+  /** Без внешних отступов у контента (страница чата); иначе поля как у остальных разделов */
+  flush?: boolean
+  /**
+   * Не включать overflow-y:auto на внутреннем блоке — для редакторов на весь экран (канвас),
+   * иначе высота «плавает» и Vue Flow постоянно пересчитывает размеры.
+   */
+  preventInnerScroll?: boolean
+}
+
+const props = defineProps<Props>()
+
+const showAuthModal = ref(false)
+const route = useRoute()
+const store = useAgentEditorStore()
+const { agent, isLoading, isSaving } = storeToRefs(store)
+const { isAuthenticated } = useAuth()
+const { canEditAgents } = usePermissions()
+
+// Sync breadcrumb data to layout via shared state
+import { useLayoutState } from '~/composables/useLayoutState'
+const { breadcrumbTitle, breadcrumbAgentName, hideTopBarActions } = useLayoutState()
+
+watch(
+  () => props.title,
+  (t) => {
+    breadcrumbTitle.value = t
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.hideActions,
+  (v) => {
+    hideTopBarActions.value = !!v
+  },
+  { immediate: true },
+)
+
+watch(() => agent.value?.name, (name) => {
+  breadcrumbAgentName.value = name || ''
+}, { immediate: true })
+
+onUnmounted(() => {
+  // Race-safe cleanup: only clear if our title is still the active one.
+  // When navigating between agent pages, the next page's AgentPageShell may
+  // mount BEFORE this one unmounts (Vue's in-out transition / Suspense order),
+  // which would otherwise wipe the new page's breadcrumb to empty.
+  if (breadcrumbTitle.value === props.title) {
+    breadcrumbTitle.value = ''
+    breadcrumbAgentName.value = ''
+    hideTopBarActions.value = false
+  }
+})
+
+const resolveAgentId = (value: string | string[] | undefined) =>
+  Array.isArray(value) ? value[0] : value
+
+watch(
+  () => route.params.id,
+  (id) => {
+    const resolved = resolveAgentId(id as string | string[] | undefined)
+    if (resolved) {
+      store.ensureAgentLoaded(resolved)
+    }
+  },
+  { immediate: true }
+)
+
+const handleSave = async () => {
+  await store.saveAgent()
+}
+
+const handleCancel = () => {
+  navigateTo('/agents')
+}
+
+const handleAuthenticated = () => {
+  showAuthModal.value = false
+  window.location.reload()
+}
+
+const isSystemPromptPage = computed(() => {
+  const path = route.path || ''
+  return /^\/agents\/[^/]+\/prompt$/.test(path)
+})
+</script>
